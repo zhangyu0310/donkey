@@ -31,7 +31,9 @@ var (
 var (
 	dbs     []*sqlx.DB
 	records []map[uint64]string
-	counter atomic.Value
+	// Go version is too low, not support atomic.Value
+	// counter atomic.Value
+	counter uint64
 	stop    atomic.Value
 	esc     chan os.Signal
 )
@@ -64,8 +66,7 @@ func Initialize() error {
 	for i := 0; i < int(cfg.RoutineNum); i++ {
 		records = append(records, make(map[uint64]string))
 	}
-	counterType := uint64(0)
-	counter.Store(counterType)
+	atomic.StoreUint64(&counter, 0)
 	stop.Store(false)
 	return nil
 }
@@ -236,7 +237,7 @@ func execTestingSQL() error {
 		go func(routineId int) {
 			localCounter := uint64(0)
 			for !stop.Load().(bool) {
-				if counter.CompareAndSwap(localCounter, localCounter+1) {
+				if atomic.CompareAndSwapUint64(&counter, localCounter, localCounter+1) {
 					if cfg.InsertRows != 0 && localCounter >= cfg.InsertRows {
 						stop.Store(true)
 						continue
@@ -251,7 +252,7 @@ func execTestingSQL() error {
 						records[routineId][localCounter] = uuidStr
 					}
 				} else {
-					localCounter = counter.Load().(uint64)
+					localCounter = atomic.LoadUint64(&counter)
 				}
 			}
 			wg.Done()
