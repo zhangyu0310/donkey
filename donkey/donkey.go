@@ -233,6 +233,7 @@ func execTestingSQL() error {
 	cfg := config.GetGlobalConfig()
 	wg := sync.WaitGroup{}
 	wg.Add(int(cfg.RoutineNum))
+	tenPercentRowNum := cfg.InsertRows / 10
 	for i := 0; i < int(cfg.RoutineNum); i++ {
 		go func(routineId int) {
 			localCounter := uint64(0)
@@ -241,6 +242,16 @@ func execTestingSQL() error {
 					if cfg.InsertRows != 0 && localCounter >= cfg.InsertRows {
 						stop.Store(true)
 						continue
+					}
+					if cfg.InsertRows == 0 {
+						if localCounter%10000 == 0 {
+							fmt.Printf("Insert count: (%d/♾️)\n", localCounter)
+						}
+					} else {
+						if localCounter%tenPercentRowNum == 0 {
+							fmt.Printf("Insert progress: %d%% - (%d/%d)\n",
+								localCounter/tenPercentRowNum*10, localCounter, cfg.InsertRows)
+						}
 					}
 					uuidStr := uuid.New().String()
 					_, err := dbs[routineId].Exec(
@@ -265,8 +276,19 @@ func execTestingSQL() error {
 func checkForCorrectness() error {
 	fmt.Println("Checking...")
 	failed := false
+	totalRows := uint64(0)
+	nowRow := uint64(0)
+	for _, record := range records {
+		totalRows += uint64(len(record))
+	}
+	tenPercentRowNum := totalRows / 10
 	for i, record := range records {
 		for count, uuidStr := range record {
+			nowRow++
+			if nowRow%tenPercentRowNum == 0 {
+				fmt.Printf("Check progress: %d%% - (%d/%d)\n",
+					nowRow/tenPercentRowNum*10, nowRow, totalRows)
+			}
 			var data string
 			err := dbs[0].QueryRow("SELECT `uuid` FROM `donkey_test` WHERE `id`=?", count).Scan(&data)
 			if err != nil {
