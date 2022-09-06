@@ -14,6 +14,8 @@ type Config struct {
 	PostSQL      string
 	UniqueSyntax string
 	RoutineNum   uint
+	InsertData   bool
+	CheckData    bool
 }
 
 var globalCfg atomic.Value

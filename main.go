@@ -21,6 +21,8 @@ var (
 	postSQL      = flag.String("post-SQL", "", "SQL file of post SQL. Running after testing")
 	uniqueSyntax = flag.String("unique-syntax", "", "Unique syntax for create table")
 	routineNum   = flag.Uint("routine-num", 0, "Number of testing routine. (0/1 both single routine)")
+	insertData   = flag.Bool("insert-data", true, "Insert test data to testing Database")
+	checkData    = flag.Bool("check-data", true, "Check test data from testing Database")
 )
 
 func cmdConfigSetToGlobal(cfg *config.Config) {
@@ -39,6 +41,8 @@ func cmdConfigSetToGlobal(cfg *config.Config) {
 	} else {
 		cfg.RoutineNum = *routineNum
 	}
+	cfg.InsertData = *insertData
+	cfg.CheckData = *checkData
 }
 
 func main() {
