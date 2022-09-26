@@ -383,6 +383,7 @@ func execTestingSQL() error {
 						"INSERT INTO `donkey_test` (`id`, `uuid`) VALUES (?,?)",
 						localCounter, uuidStr)
 					if err != nil {
+						zlog.ErrorF("Routine %d insert testing sql failed. err: %s", routineId, err)
 						fmt.Printf("Routine %d insert testing sql failed. err: %s\n", routineId, err)
 					} else {
 						err = archives[routineId].AppendEntry(&Entry{
@@ -390,6 +391,8 @@ func execTestingSQL() error {
 							Uuid: uuidStr,
 						})
 						if err != nil {
+							zlog.ErrorF("id: %d, uuid: %s insert success, but append to archive failed",
+								localCounter, uuidStr)
 							fmt.Printf("id: %d, uuid: %s insert success, but append to archive failed\n",
 								localCounter, uuidStr)
 						}
