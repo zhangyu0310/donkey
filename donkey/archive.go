@@ -14,8 +14,9 @@ var (
 )
 
 type Entry struct {
-	Id   uint64
-	Uuid string
+	Id        uint64
+	Uuid      string
+	ExtraUuid []string
 }
 
 type Archive struct {
@@ -45,6 +46,7 @@ func NewArchive(routineId int) (*Archive, error) {
 		archive:     f,
 		readOffset:  0,
 		writeOffset: stat.Size(),
+		buffer:      make([]byte, 0, 10240),
 		EntityNum:   0,
 	}
 	return archive, nil
@@ -64,6 +66,10 @@ func (archive *Archive) AppendEntry(entry *Entry) error {
 	data = append(data, EncodeVarUint64(entry.Id)...)
 	data = append(data, EncodeVarUint64(uint64(len(entry.Uuid)))...)
 	data = append(data, []byte(entry.Uuid)...)
+	for i := 0; i < len(entry.ExtraUuid); i++ {
+		data = append(data, EncodeVarUint64(uint64(len(entry.ExtraUuid[i])))...)
+		data = append(data, []byte(entry.ExtraUuid[i])...)
+	}
 
 	n, err := archive.archive.Write(data)
 	if err != nil {
@@ -80,7 +86,7 @@ func (archive *Archive) Flush() {
 }
 
 func (archive *Archive) readSomeData() error {
-	data := make([]byte, 64)
+	data := make([]byte, 10240)
 	n, err := archive.archive.Read(data)
 	if err != nil {
 		if err != io.EOF {
@@ -142,8 +148,25 @@ func (archive *Archive) getDataFromArchive(dataLen int) ([]byte, error) {
 	}
 }
 
-func (archive *Archive) GetOneEntry() (*Entry, error) {
-	if archive.readOffset == archive.writeOffset {
+func getUuidFromArchive(archive *Archive) ([]byte, error) {
+	// Get data length
+	dataLenVarInt, err := archive.getVarIntFromArchive()
+	if err != nil {
+		fmt.Println("Get var int from archive failed, err:", err)
+		return nil, err
+	}
+	dataLen := DecodeVarUint64(dataLenVarInt)
+	// Get data
+	data, err := archive.getDataFromArchive(int(dataLen))
+	if err != nil {
+		fmt.Println("Get data from archive failed, err:", err)
+		return nil, err
+	}
+	return data, nil
+}
+
+func (archive *Archive) GetOneEntry(extraNum uint) (*Entry, error) {
+	if archive.readOffset == archive.writeOffset && len(archive.buffer) == 0 {
 		return nil, ErrReadEndOfFile
 	}
 	_, err := archive.archive.Seek(archive.readOffset, 0)
@@ -158,23 +181,26 @@ func (archive *Archive) GetOneEntry() (*Entry, error) {
 		return nil, err
 	}
 	id := DecodeVarUint64(idVarInt)
-	// Get data length
-	dataLenVarInt, err := archive.getVarIntFromArchive()
+	data, err := getUuidFromArchive(archive)
 	if err != nil {
-		fmt.Println("Get var int from archive failed, err:", err)
+		fmt.Println("Get uuid from archive failed, err:", err)
 		return nil, err
 	}
-	dataLen := DecodeVarUint64(dataLenVarInt)
-	// Get data
-	data, err := archive.getDataFromArchive(int(dataLen))
-	if err != nil {
-		fmt.Println("Get data from archive failed, err:", err)
-		return nil, err
+	// Get extra
+	extraUuid := make([]string, 0, extraNum)
+	for i := uint(0); i < extraNum; i++ {
+		data, err := getUuidFromArchive(archive)
+		if err != nil {
+			fmt.Println("Get uuid from archive failed, err:", err)
+			return nil, err
+		}
+		extraUuid = append(extraUuid, string(data))
 	}
 
 	entry := &Entry{
-		Id:   id,
-		Uuid: string(data),
+		Id:        id,
+		Uuid:      string(data),
+		ExtraUuid: extraUuid,
 	}
 	return entry, nil
 }

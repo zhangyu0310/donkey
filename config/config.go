@@ -3,19 +3,23 @@ package config
 import "sync/atomic"
 
 type Config struct {
-	DbType       string
-	Host         string
-	Port         int
-	User         string
-	Pass         string
-	Database     string
-	InsertRows   uint64
-	FrontSQL     string
-	PostSQL      string
-	UniqueSyntax string
-	RoutineNum   uint
-	InsertData   bool
-	CheckData    bool
+	DbType         string
+	Host           string
+	Port           int
+	User           string
+	Pass           string
+	Database       string
+	InsertRows     uint64
+	FrontSQL       string
+	PostSQL        string
+	UniqueSyntax   string
+	RoutineNum     uint
+	InsertData     bool
+	CheckData      bool
+	InsertPackage  uint
+	ExtraColumnNum uint
+	InsertDelay    int64
+	TimeConsume    bool
 }
 
 var globalCfg atomic.Value

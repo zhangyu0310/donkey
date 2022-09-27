@@ -32,8 +32,9 @@ func TestArchive_AppendEntry(t *testing.T) {
 
 func TestArchive_GetOneEntry(t *testing.T) {
 	archive := initArchive(t, 2)
+	archiveNum := 100000
 	entries := make([]*Entry, 0, 100)
-	for i := 0; i < 100; i++ {
+	for i := 0; i < archiveNum; i++ {
 		entry := &Entry{
 			Id:   rand.Uint64(),
 			Uuid: uuid.New().String(),
@@ -45,8 +46,8 @@ func TestArchive_GetOneEntry(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 100; i++ {
-		e, err := archive.GetOneEntry()
+	for i := 0; i < archiveNum; i++ {
+		e, err := archive.GetOneEntry(0)
 		if err != nil {
 			t.Error("Get one entry failed, err:", err)
 		}

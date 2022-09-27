@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -33,6 +34,7 @@ var (
 	ErrEntryNumFileIncomplete = errors.New("entry number file is incomplete")
 	ErrEntryNumFileLost       = errors.New("entry number file is lost")
 	ErrDatabaseDataLost       = errors.New("database data is lost")
+	ErrDifferentColumnNum     = errors.New("column num is different from config")
 )
 
 var (
@@ -111,6 +113,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	begin := time.Now()
 	if cfg.InsertData {
 		err = execTestingSQL()
 		if err != nil {
@@ -122,6 +125,12 @@ func Run() error {
 		if err != nil {
 			return err
 		}
+	}
+	end := time.Now()
+	if cfg.TimeConsume {
+		sub := end.Sub(begin).Seconds()
+		fmt.Printf("Time consume is %fs\n", sub)
+		zlog.InfoF("Time consume is %fs", sub)
 	}
 	err = execPostSQL()
 	if err != nil {
@@ -245,16 +254,16 @@ func createTestingTable() error {
 	return nil
 }
 
-func storgeEntryNum(nums []uint64) error {
+func storeEntryNum(numVec []uint64) error {
 	f, err := os.OpenFile("./entry_num", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
 		fmt.Println("Open entry number file failed, err:", err)
 		return err
 	}
 	data := make([]byte, 0, 128)
-	sizeOfEntries := EncodeFixedUint64(uint64(len(nums)))
+	sizeOfEntries := EncodeFixedUint64(uint64(len(numVec)))
 	data = append(data, sizeOfEntries[:]...)
-	for _, num := range nums {
+	for _, num := range numVec {
 		entryNum := EncodeFixedUint64(num)
 		data = append(data, entryNum[:]...)
 	}
@@ -328,7 +337,7 @@ func execTestingSQL() error {
 	}
 	atomic.StoreUint64(&counter, maxId)
 	// Read entry num file
-	originEntryNums, err := readEntryNum(cfg.RoutineNum, true)
+	originEntryNumVec, err := readEntryNum(cfg.RoutineNum, true)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			if maxId != 0 {
@@ -361,8 +370,9 @@ func execTestingSQL() error {
 	for i := 0; i < int(cfg.RoutineNum); i++ {
 		go func(routineId int) {
 			localCounter := uint64(0)
+			insertPackage := uint64(cfg.InsertPackage)
 			for !stop.Load().(bool) {
-				if atomic.CompareAndSwapUint64(&counter, localCounter, localCounter+1) {
+				if atomic.CompareAndSwapUint64(&counter, localCounter, localCounter+insertPackage) {
 					insertCount := localCounter - maxId
 					if cfg.InsertRows == 0 {
 						if insertCount%10000 == 0 {
@@ -378,25 +388,73 @@ func execTestingSQL() error {
 						stop.Store(true)
 						continue
 					}
-					uuidStr := uuid.New().String()
-					_, err := dbs[routineId].Exec(
-						"INSERT INTO `donkey_test` (`id`, `uuid`) VALUES (?,?)",
-						localCounter, uuidStr)
+
+					// Generate insert sql
+					execSqlVec := make([]string, 0, insertPackage)
+					uuidVec := make([][]string, 0, insertPackage)
+					for pack := uint64(0); pack < insertPackage; pack++ {
+						extraUuidVec := make([]string, 0, cfg.ExtraColumnNum+1)
+						for column := uint(0); column < cfg.ExtraColumnNum+1; column++ {
+							extraUuidVec = append(extraUuidVec, uuid.New().String())
+						}
+						execSql := "INSERT INTO `donkey_test` (`id`, `uuid`"
+						for column := uint(0); column < cfg.ExtraColumnNum; column++ {
+							execSql += fmt.Sprintf(", `uuid_extra_%d`", column)
+						}
+						execSql += fmt.Sprintf(") VALUES ('%d'", localCounter+pack)
+						for column := uint(0); column < cfg.ExtraColumnNum+1; column++ {
+							execSql += fmt.Sprintf(", '%s'", extraUuidVec[column])
+						}
+						execSql += ")"
+						uuidVec = append(uuidVec, extraUuidVec)
+						execSqlVec = append(execSqlVec, execSql)
+					}
+
+					tx, err := dbs[routineId].Begin()
 					if err != nil {
-						zlog.ErrorF("Routine %d insert testing sql failed. err: %s", routineId, err)
-						fmt.Printf("Routine %d insert testing sql failed. err: %s\n", routineId, err)
-					} else {
-						err = archives[routineId].AppendEntry(&Entry{
-							Id:   localCounter,
-							Uuid: uuidStr,
-						})
+						zlog.ErrorF("Routine %d starts a transaction failed, err: %s", routineId, err)
+						fmt.Printf("Routine %d starts a transaction failed, err: %s\n", routineId, err)
+					}
+					txSuccess := true
+					for pack := uint64(0); pack < insertPackage; pack++ {
+						_, err := tx.Exec(execSqlVec[pack])
 						if err != nil {
-							zlog.ErrorF("id: %d, uuid: %s insert success, but append to archive failed",
-								localCounter, uuidStr)
-							fmt.Printf("id: %d, uuid: %s insert success, but append to archive failed\n",
-								localCounter, uuidStr)
+							zlog.ErrorF("Routine %d insert testing sql failed. err: %s", routineId, err)
+							fmt.Printf("Routine %d insert testing sql failed. err: %s\n", routineId, err)
+							txSuccess = false
+							_ = tx.Rollback()
+							break
 						}
 					}
+					if txSuccess {
+						err := tx.Commit()
+						if err != nil {
+							zlog.ErrorF("Routine %d commit testing sql failed, err: %s", routineId, err)
+							fmt.Printf("Routine %d commit testing sql failed, err: %s", routineId, err)
+						} else {
+							for pack := uint64(0); pack < insertPackage; pack++ {
+								if cfg.ExtraColumnNum == 0 {
+									err = archives[routineId].AppendEntry(&Entry{
+										Id:   localCounter + pack,
+										Uuid: uuidVec[pack][0],
+									})
+								} else {
+									err = archives[routineId].AppendEntry(&Entry{
+										Id:        localCounter + pack,
+										Uuid:      uuidVec[pack][0],
+										ExtraUuid: uuidVec[pack][1:],
+									})
+								}
+								if err != nil {
+									zlog.ErrorF("id: %d, uuid: %s insert success, but append to archive failed",
+										localCounter+pack, uuidVec[pack][0])
+									fmt.Printf("id: %d, uuid: %s insert success, but append to archive failed\n",
+										localCounter+pack, uuidVec[pack][0])
+								}
+							}
+						}
+					}
+					time.Sleep(time.Duration(cfg.InsertDelay) * time.Millisecond)
 				} else {
 					localCounter = atomic.LoadUint64(&counter)
 				}
@@ -409,14 +467,14 @@ func execTestingSQL() error {
 	entryNumVec := make([]uint64, cfg.RoutineNum)
 	for i, archive := range archives {
 		entryNumVec[i] = archive.EntityNum
-		if originEntryNums != nil {
-			entryNumVec[i] += originEntryNums[i]
+		if originEntryNumVec != nil {
+			entryNumVec[i] += originEntryNumVec[i]
 		}
 		archive.Flush()
 	}
-	err = storgeEntryNum(entryNumVec)
+	err = storeEntryNum(entryNumVec)
 	if err != nil {
-		fmt.Println("Entity number storge failed, err:", err)
+		fmt.Println("Entity number store failed, err:", err)
 	}
 	return nil
 }
@@ -427,7 +485,7 @@ func checkForCorrectness() error {
 	failed := false
 	totalRows := uint64(0)
 	nowRow := uint64(0)
-	entryNums, err := readEntryNum(cfg.RoutineNum, false)
+	entryNumVec, err := readEntryNum(cfg.RoutineNum, false)
 	if err != nil {
 		if err == ErrDifferentRoutineNum {
 			fmt.Println("Panic: Use different routine num of two tasks. err:", err)
@@ -436,7 +494,7 @@ func checkForCorrectness() error {
 			fmt.Println("Can't get total entry number, will not print progress rate.")
 		}
 	} else {
-		for _, num := range entryNums {
+		for _, num := range entryNumVec {
 			totalRows += num
 		}
 	}
@@ -452,7 +510,7 @@ func checkForCorrectness() error {
 					fmt.Printf("Check progress: %d%% - (%d/%d)\n",
 						localNowRow/tenPercentRowNum*10, localNowRow, totalRows)
 				}
-				entry, err := archives[routineId].GetOneEntry()
+				entry, err := archives[routineId].GetOneEntry(cfg.ExtraColumnNum)
 				if err != nil {
 					if err == ErrReadEndOfFile {
 						wg.Done()
@@ -467,9 +525,13 @@ func checkForCorrectness() error {
 						break
 					}
 				}
-				var data string
-				err = dbs[routineId].QueryRow("SELECT `uuid` FROM `donkey_test` WHERE `id`=?", entry.Id).
-					Scan(&data)
+				row := dbs[routineId].QueryRow("SELECT * FROM `donkey_test` WHERE `id`=?", entry.Id)
+				uuidVec := make([][]byte, cfg.ExtraColumnNum+2)
+				scanVec := make([]interface{}, cfg.ExtraColumnNum+2)
+				for i := range uuidVec {
+					scanVec[i] = &uuidVec[i]
+				}
+				err = row.Scan(scanVec...)
 				if err != nil {
 					fmt.Printf("Check failed: Select id %d failed, err: %s\n", entry.Id, err)
 					zlog.ErrorF("Check failed: Select routine [%d] id [%d] & uuid [%s] failed, err: %s",
@@ -477,11 +539,20 @@ func checkForCorrectness() error {
 					failed = true
 					continue
 				}
-				if entry.Uuid != data {
+				if entry.Uuid != string(uuidVec[1]) {
 					fmt.Printf("Check failed: id %d uuid different between archive & database\n.", entry.Id)
 					zlog.ErrorF("Check failed: id [%d] uuid different between archive & database."+
-						" Archive: [%s] Database: [%s]", entry.Id, entry.Uuid, data)
+						" Archive: [%s] Database: [%s]", entry.Id, entry.Uuid, string(uuidVec[1]))
 					failed = true
+				}
+				for column := uint(0); column < cfg.ExtraColumnNum; column++ {
+					if entry.ExtraUuid[column] != string(uuidVec[column+2]) {
+						fmt.Printf("Check failed: id %d uuid different between archive & database\n.", entry.Id)
+						zlog.ErrorF("Check failed: id [%d] uuid different between archive & database."+
+							" Archive: [%s] Database: [%s]",
+							entry.Id, entry.ExtraUuid[column], string(uuidVec[column+2]))
+						failed = true
+					}
 				}
 			}
 		}(i)

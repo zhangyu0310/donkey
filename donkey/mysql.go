@@ -71,15 +71,58 @@ func createDbForMySQL() error {
 
 func createTableForMySQL() error {
 	cfg := config.GetGlobalConfig()
-	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS `donkey_test` ("+
-		"`id` BIGINT NOT NULL,"+
-		"`uuid` CHAR(36) NOT NULL,"+
-		"PRIMARY KEY (`id`)"+
-		") ENGINE=InnoDB DEFAULT CHARSET=utf8 %s", cfg.UniqueSyntax)
-	_, err := dbs[0].Exec(sql)
+	rows, err := dbs[0].Query("SHOW TABLES")
 	if err != nil {
-		fmt.Println("MySQL create table failed, err:", err)
+		fmt.Println("MySQL get tables failed, err:", err)
 		return err
+	}
+
+	existTable := false
+	for rows.Next() {
+		var tmpTableName string
+		if err = rows.Scan(&tmpTableName); err != nil {
+			fmt.Println("MySQL scan database name failed, err:", err)
+			_ = rows.Close()
+			return err
+		}
+		if tmpTableName == "donkey_test" {
+			existTable = true
+			_ = rows.Close()
+			break
+		}
+	}
+
+	if !existTable {
+		s := "CREATE TABLE IF NOT EXISTS `donkey_test` (" +
+			"`id` BIGINT NOT NULL," +
+			"`uuid` CHAR(36) NOT NULL,"
+		for i := uint(0); i < cfg.ExtraColumnNum; i++ {
+			s += fmt.Sprintf("`uuid_extra_%d` CHAR(36) NOT NULL,", i)
+		}
+		s += "PRIMARY KEY (`id`)" +
+			") ENGINE=InnoDB DEFAULT CHARSET=utf8 %s"
+		sql := fmt.Sprintf(s, cfg.UniqueSyntax)
+		_, err := dbs[0].Exec(sql)
+		if err != nil {
+			fmt.Println("MySQL create table failed, err:", err)
+			return err
+		}
+	} else {
+		// Check extra column num
+		rows, err := dbs[0].Query("DESC `donkey_test`")
+		if err != nil {
+			fmt.Println("MySQL check table column failed, err:", err)
+			return err
+		}
+		columnCount := uint(0)
+		for rows.Next() {
+			columnCount++
+		}
+		if columnCount != cfg.ExtraColumnNum+2 {
+			fmt.Printf("Extra column number is different. Testing table is [%d], config is [%d]\n",
+				columnCount-2, cfg.ExtraColumnNum)
+			return ErrDifferentColumnNum
+		}
 	}
 	return nil
 }
