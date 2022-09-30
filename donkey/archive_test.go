@@ -19,7 +19,7 @@ func initArchive(t *testing.T, id int) *Archive {
 func TestArchive_AppendEntry(t *testing.T) {
 	archive := initArchive(t, 1)
 	for i := 0; i < 100; i++ {
-		err := archive.AppendEntry(&Entry{
+		err := archive.AppendOneEntry(&Entry{
 			Id:   rand.Uint64(),
 			Uuid: uuid.New().String(),
 		})
@@ -40,7 +40,7 @@ func TestArchive_GetOneEntry(t *testing.T) {
 			Uuid: uuid.New().String(),
 		}
 		entries = append(entries, entry)
-		err := archive.AppendEntry(entry)
+		err := archive.AppendOneEntry(entry)
 		if err != nil {
 			t.Error("Append entry failed, err:", err)
 		}

@@ -28,6 +28,18 @@ type Archive struct {
 	EntityNum   uint64
 }
 
+func (entry *Entry) Encode() []byte {
+	data := make([]byte, 0, 48*len(entry.ExtraUuid))
+	data = append(data, EncodeVarUint64(entry.Id)...)
+	data = append(data, EncodeVarUint64(uint64(len(entry.Uuid)))...)
+	data = append(data, []byte(entry.Uuid)...)
+	for i := 0; i < len(entry.ExtraUuid); i++ {
+		data = append(data, EncodeVarUint64(uint64(len(entry.ExtraUuid[i])))...)
+		data = append(data, []byte(entry.ExtraUuid[i])...)
+	}
+	return data
+}
+
 func NewArchive(routineId int) (*Archive, error) {
 	idStr := strconv.Itoa(routineId)
 	fileName := "donkey_archive_" + idStr
@@ -61,24 +73,20 @@ func (archive *Archive) SeekForAppend() error {
 	return nil
 }
 
-func (archive *Archive) AppendEntry(entry *Entry) error {
-	data := make([]byte, 0, 32)
-	data = append(data, EncodeVarUint64(entry.Id)...)
-	data = append(data, EncodeVarUint64(uint64(len(entry.Uuid)))...)
-	data = append(data, []byte(entry.Uuid)...)
-	for i := 0; i < len(entry.ExtraUuid); i++ {
-		data = append(data, EncodeVarUint64(uint64(len(entry.ExtraUuid[i])))...)
-		data = append(data, []byte(entry.ExtraUuid[i])...)
-	}
-
+func (archive *Archive) AppendEntries(data []byte, entryNum uint64) error {
 	n, err := archive.archive.Write(data)
 	if err != nil {
 		fmt.Printf("Append entry to archive failed, err: (%s)\n", err)
 		return err
 	}
 	archive.writeOffset += int64(n)
-	archive.EntityNum++
+	archive.EntityNum += entryNum
 	return nil
+}
+
+func (archive *Archive) AppendOneEntry(entry *Entry) error {
+	data := entry.Encode()
+	return archive.AppendEntries(data, 1)
 }
 
 func (archive *Archive) Flush() {

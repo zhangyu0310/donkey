@@ -390,68 +390,52 @@ func execTestingSQL() error {
 					}
 
 					// Generate insert sql
-					execSqlVec := make([]string, 0, insertPackage)
 					uuidVec := make([][]string, 0, insertPackage)
 					for pack := uint64(0); pack < insertPackage; pack++ {
 						extraUuidVec := make([]string, 0, cfg.ExtraColumnNum+1)
 						for column := uint(0); column < cfg.ExtraColumnNum+1; column++ {
 							extraUuidVec = append(extraUuidVec, uuid.New().String())
 						}
-						execSql := "INSERT INTO `donkey_test` (`id`, `uuid`"
-						for column := uint(0); column < cfg.ExtraColumnNum; column++ {
-							execSql += fmt.Sprintf(", `uuid_extra_%d`", column)
+						uuidVec = append(uuidVec, extraUuidVec)
+					}
+					execSql := "INSERT INTO `donkey_test` (`id`, `uuid`"
+					for column := uint(0); column < cfg.ExtraColumnNum; column++ {
+						execSql += fmt.Sprintf(", `uuid_extra_%d`", column)
+					}
+					execSql += ") VALUES "
+					for pack := uint64(0); pack < insertPackage; pack++ {
+						if pack > 0 {
+							execSql += ","
 						}
-						execSql += fmt.Sprintf(") VALUES ('%d'", localCounter+pack)
+						execSql += fmt.Sprintf("('%d'", localCounter+pack)
 						for column := uint(0); column < cfg.ExtraColumnNum+1; column++ {
-							execSql += fmt.Sprintf(", '%s'", extraUuidVec[column])
+							execSql += fmt.Sprintf(", '%s'", uuidVec[pack][column])
 						}
 						execSql += ")"
-						uuidVec = append(uuidVec, extraUuidVec)
-						execSqlVec = append(execSqlVec, execSql)
 					}
 
-					tx, err := dbs[routineId].Begin()
+					_, err := dbs[routineId].Exec(execSql)
 					if err != nil {
-						zlog.ErrorF("Routine %d starts a transaction failed, err: %s", routineId, err)
-						fmt.Printf("Routine %d starts a transaction failed, err: %s\n", routineId, err)
-					}
-					txSuccess := true
-					for pack := uint64(0); pack < insertPackage; pack++ {
-						_, err := tx.Exec(execSqlVec[pack])
-						if err != nil {
-							zlog.ErrorF("Routine %d insert testing sql failed. err: %s", routineId, err)
-							fmt.Printf("Routine %d insert testing sql failed. err: %s\n", routineId, err)
-							txSuccess = false
-							_ = tx.Rollback()
-							break
-						}
-					}
-					if txSuccess {
-						err := tx.Commit()
-						if err != nil {
-							zlog.ErrorF("Routine %d commit testing sql failed, err: %s", routineId, err)
-							fmt.Printf("Routine %d commit testing sql failed, err: %s", routineId, err)
-						} else {
-							for pack := uint64(0); pack < insertPackage; pack++ {
-								if cfg.ExtraColumnNum == 0 {
-									err = archives[routineId].AppendEntry(&Entry{
-										Id:   localCounter + pack,
-										Uuid: uuidVec[pack][0],
-									})
-								} else {
-									err = archives[routineId].AppendEntry(&Entry{
-										Id:        localCounter + pack,
-										Uuid:      uuidVec[pack][0],
-										ExtraUuid: uuidVec[pack][1:],
-									})
-								}
-								if err != nil {
-									zlog.ErrorF("id: %d, uuid: %s insert success, but append to archive failed",
-										localCounter+pack, uuidVec[pack][0])
-									fmt.Printf("id: %d, uuid: %s insert success, but append to archive failed\n",
-										localCounter+pack, uuidVec[pack][0])
-								}
+						zlog.ErrorF("Routine %d commit testing sql failed, err: %s", routineId, err)
+						fmt.Printf("Routine %d commit testing sql failed, err: %s", routineId, err)
+					} else {
+						entryData := make([]byte, 0, insertPackage*uint64(cfg.ExtraColumnNum)*48)
+						for pack := uint64(0); pack < insertPackage; pack++ {
+							entry := &Entry{
+								Id:   localCounter + pack,
+								Uuid: uuidVec[pack][0],
 							}
+							if cfg.ExtraColumnNum != 0 {
+								entry.ExtraUuid = uuidVec[pack][1:]
+							}
+							entryData = append(entryData, entry.Encode()...)
+						}
+						err = archives[routineId].AppendEntries(entryData, insertPackage)
+						if err != nil {
+							zlog.ErrorF("id: %d, uuid: %s insert success, but append to archive failed",
+								localCounter, uuidVec[0][0])
+							fmt.Printf("id: %d, uuid: %s insert success, but append to archive failed\n",
+								localCounter, uuidVec[0][0])
 						}
 					}
 					time.Sleep(time.Duration(cfg.InsertDelay) * time.Millisecond)
