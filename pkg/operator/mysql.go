@@ -1,17 +1,29 @@
-package donkey
+package operator
 
 import (
+	"donkey/pkg/config"
+	"errors"
 	"fmt"
 	"strings"
 
-	"donkey/config"
+	"github.com/jmoiron/sqlx"
 )
 
-func createDbForMySQL() error {
+var (
+	ErrGetVariablesFailed = errors.New("get variables failed")
+	ErrDifferentColumnNum = errors.New("column num is different from config")
+)
+
+type MySQLVariable struct {
+	Name  string
+	Value string
+}
+
+func CreateDbForMySQL(db *sqlx.DB) error {
 	cfg := config.GetGlobalConfig()
 	var lowerCase bool
-	variable := &MySQLVariable{}
-	err := dbs[0].QueryRow("SHOW VARIABLES LIKE 'lower_case_table_names'").Scan(&variable.Name, &variable.Value)
+	variable := MySQLVariable{}
+	err := db.QueryRow("SHOW VARIABLES LIKE 'lower_case_table_names'").Scan(&variable.Name, &variable.Value)
 	if err != nil {
 		fmt.Println("MySQL get lower_case_table_names failed, err:", err)
 		return err
@@ -37,7 +49,7 @@ func createDbForMySQL() error {
 		dbName = cfg.Database
 	}
 
-	rows, err := dbs[0].Query("SHOW DATABASES")
+	rows, err := db.Query("SHOW DATABASES")
 	if err != nil {
 		fmt.Println("MySQL get databases failed, err:", err)
 		return err
@@ -58,7 +70,7 @@ func createDbForMySQL() error {
 	}
 	if !existDb {
 		sql := fmt.Sprintf("CREATE DATABASE %s", cfg.Database)
-		_, err = dbs[0].Exec(sql)
+		_, err = db.Exec(sql)
 		if err != nil {
 			fmt.Println("MySQL create database failed, err:", err)
 			return err
@@ -69,9 +81,9 @@ func createDbForMySQL() error {
 	return nil
 }
 
-func createTableForMySQL() error {
+func CreateTableForMySQL(db *sqlx.DB) error {
 	cfg := config.GetGlobalConfig()
-	rows, err := dbs[0].Query("SHOW TABLES")
+	rows, err := db.Query("SHOW TABLES")
 	if err != nil {
 		fmt.Println("MySQL get tables failed, err:", err)
 		return err
@@ -102,14 +114,14 @@ func createTableForMySQL() error {
 		s += "PRIMARY KEY (`id`)" +
 			") ENGINE=InnoDB DEFAULT CHARSET=utf8 %s"
 		sql := fmt.Sprintf(s, cfg.UniqueSyntax)
-		_, err := dbs[0].Exec(sql)
+		_, err := db.Exec(sql)
 		if err != nil {
 			fmt.Println("MySQL create table failed, err:", err)
 			return err
 		}
 	} else {
 		// Check extra column num
-		rows, err := dbs[0].Query("DESC `donkey_test`")
+		rows, err := db.Query("DESC `donkey_test`")
 		if err != nil {
 			fmt.Println("MySQL check table column failed, err:", err)
 			return err

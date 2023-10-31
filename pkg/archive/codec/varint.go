@@ -1,4 +1,4 @@
-package donkey
+package codec
 
 import "errors"
 

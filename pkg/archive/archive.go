@@ -1,6 +1,7 @@
-package donkey
+package archive
 
 import (
+	"donkey/pkg/archive/codec"
 	"errors"
 	"fmt"
 	"io"
@@ -30,11 +31,11 @@ type Archive struct {
 
 func (entry *Entry) Encode() []byte {
 	data := make([]byte, 0, 48*len(entry.ExtraUuid))
-	data = append(data, EncodeVarUint64(entry.Id)...)
-	data = append(data, EncodeVarUint64(uint64(len(entry.Uuid)))...)
+	data = append(data, codec.EncodeVarUint64(entry.Id)...)
+	data = append(data, codec.EncodeVarUint64(uint64(len(entry.Uuid)))...)
 	data = append(data, []byte(entry.Uuid)...)
 	for i := 0; i < len(entry.ExtraUuid); i++ {
-		data = append(data, EncodeVarUint64(uint64(len(entry.ExtraUuid[i])))...)
+		data = append(data, codec.EncodeVarUint64(uint64(len(entry.ExtraUuid[i])))...)
 		data = append(data, []byte(entry.ExtraUuid[i])...)
 	}
 	return data
@@ -107,10 +108,10 @@ func (archive *Archive) readSomeData() error {
 	return err
 }
 
-func (archive *Archive) getVarIntFromArchive() (VarUint64, error) {
+func (archive *Archive) getVarIntFromArchive() (codec.VarUint64, error) {
 	eof := false
 	for {
-		varInt, index, err := GetVarUint64(archive.buffer, 0)
+		varInt, index, err := codec.GetVarUint64(archive.buffer, 0)
 		if err != nil {
 			if eof {
 				fmt.Println("Archive is eof but get var int not enough.")
@@ -163,7 +164,7 @@ func getUuidFromArchive(archive *Archive) ([]byte, error) {
 		fmt.Println("Get var int from archive failed, err:", err)
 		return nil, err
 	}
-	dataLen := DecodeVarUint64(dataLenVarInt)
+	dataLen := codec.DecodeVarUint64(dataLenVarInt)
 	// Get data
 	data, err := archive.getDataFromArchive(int(dataLen))
 	if err != nil {
@@ -188,7 +189,7 @@ func (archive *Archive) GetOneEntry(extraNum uint) (*Entry, error) {
 		fmt.Println("Get var int from archive failed, err:", err)
 		return nil, err
 	}
-	id := DecodeVarUint64(idVarInt)
+	id := codec.DecodeVarUint64(idVarInt)
 	data, err := getUuidFromArchive(archive)
 	if err != nil {
 		fmt.Println("Get uuid from archive failed, err:", err)

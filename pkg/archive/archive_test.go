@@ -1,4 +1,4 @@
-package donkey
+package archive
 
 import (
 	"math/rand"

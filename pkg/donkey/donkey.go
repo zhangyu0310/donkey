@@ -3,11 +3,14 @@ package donkey
 import (
 	"bufio"
 	"database/sql"
+	"donkey/pkg/archive"
+	"donkey/pkg/archive/codec"
+	"donkey/pkg/config"
+	"donkey/pkg/operator"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,24 +25,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	zlog "github.com/zhangyu0310/zlogger"
-
-	"donkey/config"
 )
 
 var (
 	ErrUnknownDbType          = errors.New("unknown db type")
 	ErrNotSupportDbTypeNow    = errors.New("todo")
-	ErrGetVariablesFailed     = errors.New("get variables failed")
 	ErrDifferentRoutineNum    = errors.New("different routine number")
 	ErrEntryNumFileIncomplete = errors.New("entry number file is incomplete")
 	ErrEntryNumFileLost       = errors.New("entry number file is lost")
 	ErrDatabaseDataLost       = errors.New("database data is lost")
-	ErrDifferentColumnNum     = errors.New("column num is different from config")
 )
 
 var (
 	dbs      []*sqlx.DB
-	archives []*Archive
+	archives []*archive.Archive
 	// Go version is too low, not support atomic.Value
 	// counter atomic.Value
 	counter uint64
@@ -73,12 +72,12 @@ func Initialize() error {
 		dbs = append(dbs, db)
 	}
 	for i := 0; i < int(cfg.RoutineNum); i++ {
-		archive, err := NewArchive(i)
+		a, err := archive.NewArchive(i)
 		if err != nil {
 			fmt.Println("Get new archive failed, err:", err)
 			return err
 		}
-		archives = append(archives, archive)
+		archives = append(archives, a)
 	}
 	atomic.StoreUint64(&counter, 0)
 	stop.Store(false)
@@ -209,16 +208,11 @@ func execPostSQL() error {
 	return nil
 }
 
-type MySQLVariable struct {
-	Name  string
-	Value string
-}
-
 func createTestingDb() error {
 	cfg := config.GetGlobalConfig()
 	switch strings.ToLower(cfg.DbType) {
 	case "mysql":
-		err := createDbForMySQL()
+		err := operator.CreateDbForMySQL(dbs[0])
 		if err != nil {
 			fmt.Println("Create testing database failed, err:", err)
 			return err
@@ -238,7 +232,7 @@ func createTestingTable() error {
 	cfg := config.GetGlobalConfig()
 	switch strings.ToLower(cfg.DbType) {
 	case "mysql":
-		err := createTableForMySQL()
+		err := operator.CreateTableForMySQL(dbs[0])
 		if err != nil {
 			fmt.Println("Create testing table failed, err:", err)
 			return err
@@ -261,10 +255,10 @@ func storeEntryNum(numVec []uint64) error {
 		return err
 	}
 	data := make([]byte, 0, 128)
-	sizeOfEntries := EncodeFixedUint64(uint64(len(numVec)))
+	sizeOfEntries := codec.EncodeFixedUint64(uint64(len(numVec)))
 	data = append(data, sizeOfEntries[:]...)
 	for _, num := range numVec {
-		entryNum := EncodeFixedUint64(num)
+		entryNum := codec.EncodeFixedUint64(num)
 		data = append(data, entryNum[:]...)
 	}
 	_, err = f.Write(data)
@@ -284,7 +278,7 @@ func readEntryNum(routineNum uint, quiet bool) ([]uint64, error) {
 		}
 		return nil, err
 	}
-	data, err := ioutil.ReadAll(f)
+	data, err := io.ReadAll(f)
 	if err != nil {
 		if !quiet {
 			fmt.Println("Read entry number file failed, err:", err)
@@ -299,7 +293,7 @@ func readEntryNum(routineNum uint, quiet bool) ([]uint64, error) {
 		}
 		return nil, ErrEntryNumFileIncomplete
 	}
-	numOfEntries := DecodeFixedUint64(GetFixedUint64(data, index))
+	numOfEntries := codec.DecodeFixedUint64(codec.GetFixedUint64(data, index))
 	if numOfEntries != uint64(routineNum) {
 		if !quiet {
 			fmt.Println("Routine number is different in two tasks.")
@@ -314,9 +308,9 @@ func readEntryNum(routineNum uint, quiet bool) ([]uint64, error) {
 			}
 			return nil, ErrEntryNumFileIncomplete
 		}
-		fixedNum := GetFixedUint64(data, index)
+		fixedNum := codec.GetFixedUint64(data, index)
 		index += 8
-		entryNum := DecodeFixedUint64(fixedNum)
+		entryNum := codec.DecodeFixedUint64(fixedNum)
 		entryNumVec = append(entryNumVec, entryNum)
 	}
 	return entryNumVec, nil
@@ -328,7 +322,7 @@ func execTestingSQL() error {
 	maxId := uint64(0)
 	err := dbs[0].QueryRow("SELECT `id` FROM `donkey_test` ORDER BY `id` DESC LIMIT 1").Scan(&maxId)
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			fmt.Println("Get max insert id from testing table failed, err:", err)
 		}
 		maxId = 0
@@ -359,8 +353,8 @@ func execTestingSQL() error {
 	wg.Add(int(cfg.RoutineNum))
 	tenPercentRowNum := cfg.InsertRows / 10
 	// Seek archive for append entries
-	for _, archive := range archives {
-		err := archive.SeekForAppend()
+	for _, a := range archives {
+		err := a.SeekForAppend()
 		if err != nil {
 			fmt.Println("Seek for append entries failed, err:", err)
 			return err
@@ -421,7 +415,7 @@ func execTestingSQL() error {
 					} else {
 						entryData := make([]byte, 0, insertPackage*uint64(cfg.ExtraColumnNum)*48)
 						for pack := uint64(0); pack < insertPackage; pack++ {
-							entry := &Entry{
+							entry := &archive.Entry{
 								Id:   localCounter + pack,
 								Uuid: uuidVec[pack][0],
 							}
@@ -449,12 +443,12 @@ func execTestingSQL() error {
 	wg.Wait()
 	// Record number of insert entries.
 	entryNumVec := make([]uint64, cfg.RoutineNum)
-	for i, archive := range archives {
-		entryNumVec[i] = archive.EntityNum
+	for i, a := range archives {
+		entryNumVec[i] = a.EntityNum
 		if originEntryNumVec != nil {
 			entryNumVec[i] += originEntryNumVec[i]
 		}
-		archive.Flush()
+		a.Flush()
 	}
 	err = storeEntryNum(entryNumVec)
 	if err != nil {
@@ -471,7 +465,7 @@ func checkForCorrectness() error {
 	nowRow := uint64(0)
 	entryNumVec, err := readEntryNum(cfg.RoutineNum, false)
 	if err != nil {
-		if err == ErrDifferentRoutineNum {
+		if errors.Is(err, ErrDifferentRoutineNum) {
 			fmt.Println("Panic: Use different routine num of two tasks. err:", err)
 			return err
 		} else {
@@ -496,7 +490,7 @@ func checkForCorrectness() error {
 				}
 				entry, err := archives[routineId].GetOneEntry(cfg.ExtraColumnNum)
 				if err != nil {
-					if err == ErrReadEndOfFile {
+					if errors.Is(err, archive.ErrReadEndOfFile) {
 						wg.Done()
 						break
 					} else {

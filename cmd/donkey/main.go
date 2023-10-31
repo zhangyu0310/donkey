@@ -1,12 +1,12 @@
 package main
 
 import (
+	"donkey/pkg/config"
+	"donkey/pkg/donkey"
+	"donkey/pkg/version"
 	"flag"
 	"fmt"
 	"os"
-
-	"donkey/config"
-	"donkey/donkey"
 )
 
 var (
@@ -58,10 +58,17 @@ func cmdConfigSetToGlobal(cfg *config.Config) {
 }
 
 func main() {
+	h := flag.Bool("h", false, "show usage")
 	help := flag.Bool("help", false, "show usage")
+	v := flag.Bool("v", false, "show version")
+	ver := flag.Bool("version", false, "show version")
 	flag.Parse()
-	if *help {
+	if *h || *help {
 		flag.Usage()
+		os.Exit(0)
+	}
+	if *v || *ver {
+		fmt.Println(version.VerInfo())
 		os.Exit(0)
 	}
 	if *pass == "" {

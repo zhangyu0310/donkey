@@ -1,4 +1,4 @@
-package donkey
+package codec
 
 type FixedUint64 [8]byte
 
